@@ -35,42 +35,47 @@ PARALLEL_DOWNLOAD_NUM=16
 
 PATH=/usr/bin
 
-if type wget > /dev/null ; then # 检查是否有wget工具
-	# -q 静默
-	# -c 支持断点续传（需要服务器支持，sourceforge.net不支持断点续传）
-	# -t 重试次数 -T 超时时间 -w 重试等待时间
-	# --show-progress 显示进度条
-	# --progress=bar 进度条样式为bar,默认为dot
-	# --no-check-certificate不检查安全证书，msys2-i686-20150916.exe太老，证书失效
-	# -O 写入指定文件
-	fetch='wget -qc -t 5 -T 30 -w 2 --show-progress --progress=bar  --no-check-certificate -O'
-elif type wget > /dev/null ; then  # 检查是否有curl工具
-	# -k不检查安全证书，msys2-i686-20150916.exe太老，证书失效
-	# -o 写入指定文件
-	fetch='curl -ko'
-else
-	echo "没有下载工具，需要下载wget或者curl"
-fi
-
-mkdir -p "$OUT_DIR"
-
-if [ ! -s "$CACHE_HTML" ]; then # 检测$CACHE_HTML文件是否为空，-s为非空检测
-	echo "下载: $CACHE_HTML"
-	${fetch} "${CACHE_HTML}.part" "$MINGW_I686_URL"
-	mv "${CACHE_HTML}.part" "${CACHE_HTML}"
-else
-	echo "下载: $CACHE_HTML（已存在跳过）"
-fi
-
-if [ ! -s "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
-	echo 生成 $ALL_PKG_LIST
-	grep -oE '/i686/[^"]+pkg\.tar\.[a-z0-9]+/download' "$CACHE_HTML" | sed -n 's#.*/\([^/]*\)/download#\1#p' | sort -u > $ALL_PKG_LIST
-else
-	echo "生成 $ALL_PKG_LIST (已存在跳过)"
-fi
-
 declare -A PkgName
 declare -A PkgVer
+
+check_tools() {
+	if type wget > /dev/null ; then # 检查是否有wget工具
+		# -q 静默
+		# -c 支持断点续传（需要服务器支持，sourceforge.net不支持断点续传）
+		# -t 重试次数 -T 超时时间 -w 重试等待时间
+		# --show-progress 显示进度条
+		# --progress=bar 进度条样式为bar,默认为dot
+		# --no-check-certificate不检查安全证书，msys2-i686-20150916.exe太老，证书失效
+		# -O 写入指定文件
+		fetch='wget -qc -t 5 -T 30 -w 2 --show-progress --progress=bar  --no-check-certificate -O'
+	elif type wget > /dev/null ; then  # 检查是否有curl工具
+		# -k不检查安全证书，msys2-i686-20150916.exe太老，证书失效
+		# -o 写入指定文件
+		fetch='curl -ko'
+	else
+		echo "没有下载工具，需要下载wget或者curl"
+		exit 1
+	fi
+}
+
+download_html() {
+	if [ ! -s "$CACHE_HTML" ]; then # 检测$CACHE_HTML文件是否为空，-s为非空检测
+		echo "下载: $CACHE_HTML"
+		${fetch} "${CACHE_HTML}.part" "$MINGW_I686_URL"
+		mv "${CACHE_HTML}.part" "${CACHE_HTML}"
+	else
+		echo "下载: $CACHE_HTML（已存在跳过）"
+	fi
+}
+
+build_pkg_list() {
+	if [ ! -s "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
+		echo 生成 $ALL_PKG_LIST
+		grep -oE '/i686/[^"]+pkg\.tar\.[a-z0-9]+/download' "$CACHE_HTML" | sed -n 's#.*/\([^/]*\)/download#\1#p' | sort -u > $ALL_PKG_LIST
+	else
+		echo "生成 $ALL_PKG_LIST (已存在跳过)"
+	fi
+}
 
 compare_ver() {
 	new=$1
@@ -97,8 +102,9 @@ compare_ver() {
 }
 
 record_pkg() {
+	# mingw-w64-i686-3proxy-0.8.12-1-any.pkg.tar.xz
 	local full_name=$1
-	# 去掉-any.pkg.tar.xz
+	# 去掉-any.pkg.tar.xz，剩下：mingw-w64-i686-3proxy-0.8.12-1
 	local name1=${full_name%-*}
 	# 获取编译次数
 	local buildCount=${name1##*-}
@@ -181,18 +187,6 @@ build_latest_pkg() {
 	fi
 }
 
-build_latest_pkg
-
-readarray -t packages < $LATEST_PKG_LIST
-PKG_COUNT=${#packages[@]}
-echo "$LATEST_PKG 解析到 $PKG_COUNT 个软件包"
-if [[ "$PKG_COUNT" == 0 ]]; then
-	echo "错误：未检测到 pkg.tar.* 文件"
-	exit 1
-fi
-
-echo "开始下载软件包"
-cd $OUT_DIR
 download() {
 	filename=$1
 	local n=$2
@@ -207,12 +201,21 @@ download() {
 	mv "${filename}.part" "$filename"
 }
 
-# 导出函数，使子进程可以调用
-export -f download
-# 导出变量，使子进程可以使用
-export MINGW_I686_URL PKG_COUNT fetch
-
 parall_download() {
+	# 导出函数，使子进程可以调用
+	export -f download
+	# 导出变量，使子进程可以使用
+	export MINGW_I686_URL PKG_COUNT fetch
+	readarray -t packages < $LATEST_PKG_LIST
+	PKG_COUNT=${#packages[@]}
+	echo "$LATEST_PKG 解析到 $PKG_COUNT 个软件包"
+	if [[ "$PKG_COUNT" == 0 ]]; then
+		echo "错误：未检测到 pkg.tar.* 文件"
+		exit 1
+	fi
+
+	echo "开始下载软件包"
+	cd $OUT_DIR
 	# 生成序号并并行执行
 	for i in "${!packages[@]}"; do
 		# 跳过空行
@@ -228,9 +231,16 @@ parall_download() {
 ' _ {}
 }
 
+build_db() {
+	echo "生成数据库"
+	rm -f "$DBNAME".db "$DBNAME".files "$DBNAME".db.tar.gz "$DBNAME".files.tar.gz
+	repo-add "$DBNAME.db.tar.gz" *.pkg.tar.*
+}
+
+check_tools
+download_html
+build_pkg_list
+mkdir -p "$OUT_DIR"
+build_latest_pkg
 parall_download
-
-echo "生成数据库"
-rm -f "$DBNAME".db "$DBNAME".files "$DBNAME".db.tar.gz "$DBNAME".files.tar.gz
-
-repo-add "$DBNAME.db.tar.gz" *.pkg.tar.*
+build_db

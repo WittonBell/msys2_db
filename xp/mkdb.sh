@@ -36,7 +36,6 @@ PARALLEL_DOWNLOAD_NUM=16
 PATH=/usr/bin
 
 declare -A PkgName # 定义字典：Key为没有版本号的包名，Value为包括版本号的包名
-declare -A PkgVer # 定义字典：Key为没有版本号的包名，Value为包的版本号
 
 check_tools() {
 	if type wget > /dev/null ; then # 检查是否有wget工具
@@ -110,27 +109,19 @@ record_pkg() {
 	local full_name=$1
 	# 去掉-any.pkg.tar.xz，结果：mingw-w64-i686-3proxy-0.8.12-1
 	local name1=${full_name%-*}
-	# 获取编译次数：-1
-	local buildCount=${name1##*-}
 	# 去掉编译次数，结果：mingw-w64-i686-3proxy-0.8.12
 	local name2=${name1%-*}
 	# 去掉版本号，获取包名，结果：mingw-w64-i686-3proxy
 	local name=${name2%-*}
-	# 获取版本号，结果：0.8.12
-	local ver=${name2##*-}
-	# 添加编译次数，结果：0.8.12-1
-	ver=${ver}"-"$buildCount
 	if [[ ${PkgName[$name]} == "" ]]; then # 如果没有记录，则记录包的全名及版本号
 		PkgName[$name]=$full_name
-		PkgVer[$name]=${ver}
 	else
 		# 之前有记录过，获取之前记录的版本号
-		oldVer=${PkgVer[$name]}
+		old=${PkgName[$name]}
 		# 调用vercmp进行版本比较，版本号大则返回1，小则返回-1，相等返回0
-		result=$(vercmp ${ver} ${oldVer})
+		result=$(vercmp ${full_name} ${old})
 		if (($result > 0)); then
 			PkgName[$name]=$full_name
-			PkgVer[$name]=${ver}
 		fi
 	fi
 }
@@ -155,14 +146,8 @@ build_latest_pkg() {
 				exit 1
 			fi
 			# 保存所有最新版本到文件
-			for name in "${!PkgName[@]}" # 获取PkgName字典所有的键
-			{
-				full_name=${PkgName[${name}]}
-				echo $full_name >> temp.txt
-			}
-			# 进行排序
-			sort temp.txt > $LATEST_PKG_LIST
-			rm -rf temp.txt
+			# 使用sed将空格替换成换行符，再排序，排序时不区分大小写
+			echo ${PkgName[@]} | sed 's/\ /\n/g' | sort -f > $LATEST_PKG_LIST
 		fi
 	fi
 }
@@ -177,7 +162,9 @@ download() {
 	fi
 	URL="$MINGW_I686_URL$filename/download"
 	echo "[$n/$PKG_COUNT]下载：$filename"
+	# 下载到一个临时文件
 	${fetch} "${filename}.part" "$URL"
+	# 下载完成后改名
 	mv "${filename}.part" "$filename"
 }
 
@@ -186,7 +173,9 @@ parall_download() {
 	export -f download
 	# 导出变量，使子进程可以使用
 	export MINGW_I686_URL PKG_COUNT fetch
+	# 将$LATEST_PKG_LIST文件内容读取到数组中
 	readarray -t packages < $LATEST_PKG_LIST
+	# 获取数组大小
 	PKG_COUNT=${#packages[@]}
 	echo "$LATEST_PKG 解析到 $PKG_COUNT 个软件包"
 	if [[ "$PKG_COUNT" == 0 ]]; then
@@ -198,15 +187,13 @@ parall_download() {
 	cd $OUT_DIR
 	# 生成序号并并行执行
 	for i in "${!packages[@]}"; do
-		# 跳过空行
-		[[ -z "${packages[i]}" ]] && continue
 		# 计算序号（从1开始）
 		idx=$((i + 1))
-		echo "$idx ${packages[i]}"
-	done | xargs -n 2 -P "$PARALLEL_DOWNLOAD_NUM" -I {} bash -c '
-	args=($1)
-	idx=${args[0]}
-	pkg=${args[1]}
+		echo "$idx ${packages[i]}" # 返回参数，第一个参数是序号,第二个参数是包名
+	done | xargs -P "$PARALLEL_DOWNLOAD_NUM" -I {} bash -c ' # -I {} 会把所有参数作为一个整体传给bash
+	args=($1)				# 把参数数组化
+	idx=${args[0]}			# 取第一个参数：序号
+	pkg=${args[1]}			# 取第二个参数：包名
 	download "$pkg" "$idx"
 ' _ {}
 }
@@ -220,7 +207,7 @@ build_db() {
 check_tools
 download_html
 build_pkg_list
-mkdir -p "$OUT_DIR"
 build_latest_pkg
+mkdir -p "$OUT_DIR"
 parall_download
 build_db

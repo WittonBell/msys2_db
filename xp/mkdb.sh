@@ -35,8 +35,8 @@ PARALLEL_DOWNLOAD_NUM=16
 
 PATH=/usr/bin
 
-declare -A PkgName
-declare -A PkgVer
+declare -A PkgName # 定义字典：Key为没有版本号的包名，Value为包括版本号的包名
+declare -A PkgVer # 定义字典：Key为没有版本号的包名，Value为包的版本号
 
 check_tools() {
 	if type wget > /dev/null ; then # 检查是否有wget工具
@@ -54,6 +54,10 @@ check_tools() {
 		fetch='curl -ko'
 	else
 		echo "没有下载工具，需要下载wget或者curl"
+		exit 1
+	fi
+	if ! type vercmp > /dev/null ; then
+		echo 没有版本比较工具：vercmp
 		exit 1
 	fi
 }
@@ -104,57 +108,30 @@ compare_ver() {
 record_pkg() {
 	# mingw-w64-i686-3proxy-0.8.12-1-any.pkg.tar.xz
 	local full_name=$1
-	# 去掉-any.pkg.tar.xz，剩下：mingw-w64-i686-3proxy-0.8.12-1
+	# 去掉-any.pkg.tar.xz，结果：mingw-w64-i686-3proxy-0.8.12-1
 	local name1=${full_name%-*}
-	# 获取编译次数
+	# 获取编译次数：-1
 	local buildCount=${name1##*-}
-	# 去掉编译次数
+	# 去掉编译次数，结果：mingw-w64-i686-3proxy-0.8.12
 	local name2=${name1%-*}
-	# 去掉版本号，获取包名
+	# 去掉版本号，获取包名，结果：mingw-w64-i686-3proxy
 	local name=${name2%-*}
-	# 获取版本号
+	# 获取版本号，结果：0.8.12
 	local ver=${name2##*-}
-	declare -a arVer # 声明一个索引数组
-	while [ $ver ]
-	do
-		v=${ver%%.*} # 从后向前去掉内容，直到第一个点号，即取第一个点前面的版本号
-		ver=${ver#*.} # 从前向后去掉内容，直到第一个点号，即取第一个点后面的版本号
-		if [[ $v == "0" ]]; then
-			arVer+=($v) # 如果只有一个0则保留
-		else
-			arVer+=("${v#"${v%%[!0]*}"}") # 添加去除前导零的数组元素
-		fi
-		if [[ $ver != *"."* ]]; then # 如果没有点号，只有唯一的一个版本号了
-			if [[ $ver == "0" ]]; then
-				arVer+=($ver)  # 如果只有一个0则保留
-			else
-				arVer+=("${ver#"${ver%%[!0]*}"}") # 添加去除前导零的数组元素
-			fi
-			break
-		fi
-	done
-	arVer+=($buildCount)
-	#echo 数组:${arVer[@]}
-	if [[ ${PkgName[$name]} == "" ]]; then
-		#echo 添加 $name
+	# 添加编译次数，结果：0.8.12-1
+	ver=${ver}"-"$buildCount
+	if [[ ${PkgName[$name]} == "" ]]; then # 如果没有记录，则记录包的全名及版本号
 		PkgName[$name]=$full_name
-		PkgVer[$name]=${arVer[@]}
+		PkgVer[$name]=${ver}
 	else
-		oldVer=(${PkgVer[$name]}) # 需要转换成数组
-		#计算两个数组的最大长度
-		maxlen=$((${#arVer[@]} > ${#oldVer[@]} ? ${#arVer[@]} : ${#oldVer[@]}))
-		for ((i=0; i < $maxlen; i++))
-		{
-			result=$(compare_ver ${arVer[$i]} ${oldVer[$i]})
-			if (($result > 0)); then
-				#echo 更新 $full_name
-				PkgVer[$name]=${arVer[@]}
-				PkgName[$name]=$full_name
-				return 0
-			elif (($result < 0)); then
-				return 0
-			fi
-		}
+		# 之前有记录过，获取之前记录的版本号
+		oldVer=${PkgVer[$name]}
+		# 调用vercmp进行版本比较，版本号大则返回1，小则返回-1，相等返回0
+		result=$(vercmp ${ver} ${oldVer})
+		if (($result > 0)); then
+			PkgName[$name]=$full_name
+			PkgVer[$name]=${ver}
+		fi
 	fi
 }
 
@@ -165,22 +142,25 @@ build_latest_pkg() {
 		if [ ! -s "${LATEST_PKG_LIST}" ]; then
 			echo "生成最新版本软件包到 $LATEST_PKG_LIST"
 			local total=$(wc -l < $ALL_PKG_LIST)
-			local n=0
+			local n=1
 			while read -r name; do
 				echo [$n/$total] $name
 				let n+=1
 				record_pkg $name
 			done < "$ALL_PKG_LIST"
 
-			local PKG_COUNT=${#PkgName[@]}
+			local PKG_COUNT=${#PkgName[@]} # 获取PkgName字典的大小
 			if [[ "$PKG_COUNT" == 0 ]]; then
-				return
+				echo "错误：未检测到 pkg.tar.* 文件"
+				exit 1
 			fi
-			for name in "${!PkgName[@]}"
+			# 保存所有最新版本到文件
+			for name in "${!PkgName[@]}" # 获取PkgName字典所有的键
 			{
 				full_name=${PkgName[${name}]}
 				echo $full_name >> temp.txt
 			}
+			# 进行排序
 			sort temp.txt > $LATEST_PKG_LIST
 			rm -rf temp.txt
 		fi

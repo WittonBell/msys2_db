@@ -19,5 +19,5 @@
    #SigLevel    = Required DatabaseOptional
    ```
 
-4. 在MinGW32 Shell下执行`xp/mkdb.sh`，将生成的`mingw32.db`文件复制到`/var/lib/pacman/sync`下，复制前可以做一个备份。
+4. 在MinGW32 Shell下执行`mkdb.sh`，将生成的`mingw32.db`文件复制到`/var/lib/pacman/sync`下，复制前可以做一个备份。
 

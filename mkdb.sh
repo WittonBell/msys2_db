@@ -3,6 +3,14 @@
 set -e
 set -o pipefail
 
+# 是否下载所有软件包，非0为下载所有，0为只下载最新版本
+IS_DOWNLOAD_ALL=0
+# 并行下载数量
+PARALLEL_NUM=16
+
+OS="xp"
+DBNAME="mingw32"
+
 REPO_URL="https://sourceforge.net/projects/msys2-snapshot/files/"
 
 MINGW_URL="${REPO_URL}msys2/mingw/"
@@ -22,17 +30,71 @@ DISTRIB_X64_URL="${MINGW_URL}x86_64/"
 
 XP_DISTRIB_URL="${DISTRIB_I686_URL}/msys2-i686-20150916.exe/download"
 
-ALL_PKG_LIST="all_pkgs.txt"
-LATEST_PKG_LIST="latest_pkgs.txt"
-SPEC_PKGS="spec_pkgs.txt"
-OUT_DIR="./i686"
-DBNAME="mingw32"
-CACHE_HTML="i686.html"
+usage() {
+	echo "用法：${0##*/} [选项]"
+	echo "选项:"
+	echo " -a 下载全部包，默认只下载最新版本"
+	echo " -p <并行下载数> 指定并行下载的数量，默认数量：$PARALLEL_NUM"
+	echo " -s <目标系统>，默认为xp，目标系统可以是：xp，win7"
+	echo " -t <类型> 指定生成的数据库类型，默认为mingw32，可以是：mingw32，mingw64，msys"
 
-# 是否下载所有软件包，非0为下载所有，0为只下载最新版本
-IS_DOWNLOAD_ALL=0
-# 并行下载数量
-PARALLEL_NUM=16
+	exit 0
+}
+
+# 解析命令行参数
+while getopts ahp:t: opt ; do
+	case $opt in
+		a)
+			echo "将要下载全部包"
+			IS_DOWNLOAD_ALL=1
+			;;
+		h)
+			usage
+			;;
+		p)
+			PARALLEL_NUM="$OPTARG"
+			echo "并行下载数：$PARALLEL_NUM"
+			;;
+		s)
+			case "$OPTARG" in
+				xp)
+					OS="xp"
+					;;
+				win7)
+					OS="win7"
+					;;
+				*)
+					usage
+					;;
+			esac
+			;;
+		t)
+			case "$OPTARG" in
+				mingw32)
+					DBNAME="mingw32"
+					;;
+				mingw64)
+					DBNAME="mingw64"
+					;;
+				msys)
+					DBNAME="msys"
+					;;
+				*)
+					usage
+					;;
+			esac
+			;;
+		*)
+			usage
+			;;
+	esac
+done
+
+OUT_DIR="${OS}/${DBNAME}"
+CACHE_HTML="${OS}/${DBNAME}.html"
+ALL_PKG_LIST="${OS}/${DBNAME}_all_pkgs.txt"
+LATEST_PKG_LIST="${OS}/${DBNAME}_latest_pkgs.txt"
+SPEC_PKGS="${OS}/${DBNAME}_spec_pkgs.txt"
 
 PATH=/usr/bin
 

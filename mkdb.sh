@@ -3,13 +3,12 @@
 set -e
 set -o pipefail
 
+# 是否显示详细信息
+verborse=0
 # 是否下载所有软件包，非0为下载所有，0为只下载最新版本
 IS_DOWNLOAD_ALL=0
 # 并行下载数量
 PARALLEL_NUM=16
-
-OS="xp"
-DBNAME="mingw32"
 
 REPO_URL="https://sourceforge.net/projects/msys2-snapshot/files/"
 
@@ -30,30 +29,67 @@ DISTRIB_X64_URL="${MINGW_URL}x86_64/"
 
 XP_DISTRIB_URL="${DISTRIB_I686_URL}/msys2-i686-20150916.exe/download"
 
+OS="xp"
+ARCH=32
+TYPE="mingw"
+URL="$MINGW_I686_URL"
+FORCE=0
+
 usage() {
 	echo "用法：${0##*/} [选项]"
 	echo "选项:"
-	echo " -a 下载全部包，默认只下载最新版本"
+	echo " -b <架构>，mingw默认为当前架构，可以是：32， 64"
+	echo " -f 强制重新下载Web页面，解析所有包，生成最新包列表"
 	echo " -p <并行下载数> 指定并行下载的数量，默认数量：$PARALLEL_NUM"
 	echo " -s <目标系统>，默认为xp，目标系统可以是：xp，win7"
-	echo " -t <类型> 指定生成的数据库类型，默认为mingw32，可以是：mingw32，mingw64，msys"
+	echo " -t <类型> 指定生成的数据库类型，默认为mingw，可以是：mingw，msys"
+	echo " -v 显示详细信息"
 
 	exit 0
 }
 
+# 根据当前系统来决定使用msys的32位版本还是64位版本
+detected_arch() {
+	local sys=$(uname -a)
+	local sys1=${sys% *}
+	case ${sys1##* } in
+		i686)
+			ARCH=32
+			URL="$MINGW_I686_URL"
+			;;
+		x86_64)
+			ARCH=64
+			URL="$MINGW_X64_URL"
+			;;
+		*)
+			echo 未知的系统架构
+			exit 1
+			;;
+	esac
+}
+
+detected_arch
+
 # 解析命令行参数
-while getopts ahp:t: opt ; do
+while getopts ab:fhp:t:v opt ; do
 	case $opt in
-		a)
-			echo "将要下载全部包"
-			IS_DOWNLOAD_ALL=1
+		b)
+			ARCH="$OPTARG"
+			case $ARCH in
+				"32"|"64");;
+				*)
+					echo "不支持的架构，只支持32，64"
+					usage
+					;;
+			esac;;
+		f)
+			FORCE=1
 			;;
 		h)
 			usage
 			;;
 		p)
 			PARALLEL_NUM="$OPTARG"
-			echo "并行下载数：$PARALLEL_NUM"
 			;;
 		s)
 			case "$OPTARG" in
@@ -70,19 +106,19 @@ while getopts ahp:t: opt ; do
 			;;
 		t)
 			case "$OPTARG" in
-				mingw32)
-					DBNAME="mingw32"
-					;;
-				mingw64)
-					DBNAME="mingw64"
+				mingw)
+					TYPE="mingw"
 					;;
 				msys)
-					DBNAME="msys"
+					TYPE="msys"
 					;;
 				*)
 					usage
 					;;
 			esac
+			;;
+		v)
+			verborse=1
 			;;
 		*)
 			usage
@@ -90,13 +126,35 @@ while getopts ahp:t: opt ; do
 	esac
 done
 
-OUT_DIR="${OS}/${DBNAME}"
-CACHE_HTML="${OS}/${DBNAME}.html"
-ALL_PKG_LIST="${OS}/${DBNAME}_all_pkgs.txt"
-LATEST_PKG_LIST="${OS}/${DBNAME}_latest_pkgs.txt"
-SPEC_PKGS="${OS}/${DBNAME}_spec_pkgs.txt"
+OUT_DIR="${OS}/${TYPE}${ARCH}"
+CACHE_HTML="${OS}/${TYPE}${ARCH}.html"
+ALL_PKG_LIST="${OS}/${TYPE}${ARCH}_all_pkgs.txt"
+LATEST_PKG_LIST="${OS}/${TYPE}${ARCH}_latest_pkgs.txt"
+SPEC_PKGS="${OS}/${TYPE}${ARCH}_spec_pkgs.txt"
 
 PATH=/usr/bin
+
+if [[ $TYPE == "msys" ]]; then
+	DBNAME="msys"
+	if (($ARCH == 32)); then
+		URL=$MSYS_I686_URL
+	else
+		URL=$MSYS_X64_URL
+	fi
+else
+	DBNAME="${TYPE}${ARCH}"
+fi
+
+if ((verborse)); then
+	echo "架构：$ARCH"
+	echo "输出目录：$OUT_DIR"
+	echo "下载URL：$URL"
+	echo "将要下载：$CACHE_HTML"
+	echo "所有包存放到：$ALL_PKG_LIST"
+	echo "最新包存放到：$LATEST_PKG_LIST"
+	echo "使用特定版本的包：$SPEC_PKGS"
+	echo "数据文件名：$DBNAME"
+fi
 
 declare -A PkgName # 定义字典：Key为没有版本号的包名，Value为包括版本号的包名
 
@@ -127,10 +185,10 @@ check_tools() {
 
 # 下载html文件
 download_html() {
-	if [ ! -s "$CACHE_HTML" ]; then # 检测$CACHE_HTML文件是否为空，-s为非空检测
+	if (($FORCE)) || [ ! -s "$CACHE_HTML" ]; then # 检测$CACHE_HTML文件是否为空，-s为非空检测
 		echo "下载: $CACHE_HTML"
-		${fetch} "${CACHE_HTML}.part" "$MINGW_I686_URL"
-		mv "${CACHE_HTML}.part" "${CACHE_HTML}"
+		${fetch} "${CACHE_HTML}.part" "$URL"
+		mv -f "${CACHE_HTML}.part" "${CACHE_HTML}"
 	else
 		echo "下载: $CACHE_HTML（已存在，跳过）"
 	fi
@@ -138,9 +196,16 @@ download_html() {
 
 # 从下载的html文件中分析出可以下载的包
 build_pkg_list() {
-	if [ ! -s "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
+	if (($FORCE)) || [ ! -s "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
 		echo 生成 $ALL_PKG_LIST
-		grep -oE '/i686/[^"]+pkg\.tar\.[a-z0-9]+/download' "$CACHE_HTML" | sed -n 's#.*/\([^/]*\)/download#\1#p' | sort -u > $ALL_PKG_LIST
+		local re='/i686/[^"]+pkg\.tar\.[a-z0-9]+/download'
+		if (($ARCH == 64)); then
+			re='/x86_64/[^"]+pkg\.tar\.[a-z0-9]+/download'
+		fi
+		if ((verborse)); then
+			echo 匹配的正则表达式：$re
+		fi
+		grep -oE $re "$CACHE_HTML" | sed -n 's#.*/\([^/]*\)/download#\1#p' | sort -u > $ALL_PKG_LIST
 	else
 		echo "生成 $ALL_PKG_LIST (已存在，跳过)"
 	fi
@@ -170,6 +235,9 @@ apply_spec_pkg() {
 		name=$(parse_name $full_name)
 		# 将名字为$name的包替换成指定包
 		ar[$name]=$full_name
+		if ((verborse)); then
+			echo "使用特定版本 $full_name"
+		fi
 		let n+=1
 	done < "$SPEC_PKGS"
 	echo "使用 $SPEC_PKGS 中 ${n} 个包"
@@ -179,16 +247,20 @@ apply_spec_pkg() {
 record_pkg() {
 	# mingw-w64-i686-3proxy-0.8.12-1-any.pkg.tar.xz
 	local full_name=$1
-	name=$(parse_name $full_name)
-	if [[ ${PkgName[$name]} == "" ]]; then # 如果没有记录，则记录包的全名及版本号
+	local name=$(parse_name $full_name)
+	# 之前有记录过，获取之前记录的版本号
+	local old=${PkgName[$name]}
+	if [[ $old == "" ]]; then # 如果没有记录，则记录包的全名及版本号
 		PkgName[$name]=$full_name
+		res="增加"
 	else
-		# 之前有记录过，获取之前记录的版本号
-		old=${PkgName[$name]}
 		# 调用vercmp进行版本比较，版本号大则返回1，小则返回-1，相等返回0
 		result=$(vercmp ${full_name} ${old})
 		if (($result > 0)); then
 			PkgName[$name]=$full_name
+			res="更新"
+		else
+			res="不变"
 		fi
 	fi
 }
@@ -198,14 +270,15 @@ build_latest_pkg() {
 	if ((IS_DOWNLOAD_ALL)); then
 		LATEST_PKG_LIST=$ALL_PKG_LIST
 	else
-		if [ ! -s "${LATEST_PKG_LIST}" ]; then
+		if (($FORCE)) || [ ! -s "${LATEST_PKG_LIST}" ]; then
 			echo "生成 $LATEST_PKG_LIST"
 			local total=$(wc -l < $ALL_PKG_LIST)
-			local n=1
+			local n=0
+			res=""
 			while read -r name; do
-				echo [$n/$total] $name
-				let n+=1
 				record_pkg $name
+				let n+=1
+				echo [$n/$total] $name $res
 			done < "$ALL_PKG_LIST"
 
 			local PKG_COUNT=${#PkgName[@]} # 获取PkgName字典的大小
@@ -232,7 +305,7 @@ download() {
 		echo "[$n/$PKG_COUNT]已存在：$filename（跳过）"
 		return 0
 	fi
-	URL="$MINGW_I686_URL$filename/download"
+	URL="$URL$filename/download"
 	echo "[$n/$PKG_COUNT]下载：$filename"
 	# 下载到一个临时文件
 	${fetch} "${filename}.part" "$URL"
@@ -244,12 +317,12 @@ parall_download() {
 	# 导出函数，使子进程可以调用
 	export -f download
 	# 导出变量，使子进程可以使用
-	export MINGW_I686_URL PKG_COUNT fetch
+	export URL PKG_COUNT fetch
 	# 将$LATEST_PKG_LIST文件内容读取到数组中
 	readarray -t packages < $LATEST_PKG_LIST
 	# 获取数组大小
 	PKG_COUNT=${#packages[@]}
-	echo "$LATEST_PKG 解析到 $PKG_COUNT 个软件包"
+	echo "$LATEST_PKG_LIST 解析到 $PKG_COUNT 个软件包"
 	if [[ "$PKG_COUNT" == 0 ]]; then
 		echo "错误：未检测到 pkg.tar.* 文件"
 		exit 1

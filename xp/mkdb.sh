@@ -20,10 +20,11 @@ MSYS_SOURCE_URL="${MSYS_URL}sources/"
 DISTRIB_I686_URL="${MINGW_URL}i686/"
 DISTRIB_X64_URL="${MINGW_URL}x86_64/"
 
-XP_DISTRIB_URL="${DISTRIB_I686_URL}/msys2-i686-20150916.exe"
+XP_DISTRIB_URL="${DISTRIB_I686_URL}/msys2-i686-20150916.exe/download"
 
 ALL_PKG_LIST="all_pkgs.txt"
 LATEST_PKG_LIST="latest_pkgs.txt"
+SPEC_PKGS="spec_pkgs.txt"
 OUT_DIR="./i686"
 DBNAME="mingw32"
 CACHE_HTML="i686.html"
@@ -31,12 +32,13 @@ CACHE_HTML="i686.html"
 # 是否下载所有软件包，非0为下载所有，0为只下载最新版本
 IS_DOWNLOAD_ALL=0
 # 并行下载数量
-PARALLEL_DOWNLOAD_NUM=16
+PARALLEL_NUM=16
 
 PATH=/usr/bin
 
 declare -A PkgName # 定义字典：Key为没有版本号的包名，Value为包括版本号的包名
 
+# 检查脚本需要使用到的工具
 check_tools() {
 	if type wget > /dev/null ; then # 检查是否有wget工具
 		# -q 静默
@@ -61,50 +63,30 @@ check_tools() {
 	fi
 }
 
+# 下载html文件
 download_html() {
 	if [ ! -s "$CACHE_HTML" ]; then # 检测$CACHE_HTML文件是否为空，-s为非空检测
 		echo "下载: $CACHE_HTML"
 		${fetch} "${CACHE_HTML}.part" "$MINGW_I686_URL"
 		mv "${CACHE_HTML}.part" "${CACHE_HTML}"
 	else
-		echo "下载: $CACHE_HTML（已存在跳过）"
+		echo "下载: $CACHE_HTML（已存在，跳过）"
 	fi
 }
 
+# 从下载的html文件中分析出可以下载的包
 build_pkg_list() {
 	if [ ! -s "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
 		echo 生成 $ALL_PKG_LIST
 		grep -oE '/i686/[^"]+pkg\.tar\.[a-z0-9]+/download' "$CACHE_HTML" | sed -n 's#.*/\([^/]*\)/download#\1#p' | sort -u > $ALL_PKG_LIST
 	else
-		echo "生成 $ALL_PKG_LIST (已存在跳过)"
+		echo "生成 $ALL_PKG_LIST (已存在，跳过)"
 	fi
 }
 
-compare_ver() {
-	new=$1
-	old=$2
-	# 先判断是否为纯数字，是则直接按数值比较，否则按字符串比较
-	if [[ $new =~ ^[0-9]+$ ]] && [[ $old =~ ^[0-9]+$ ]]; then
-		if (($new > $old)); then
-			echo 1
-			return 0
-		elif (($new < $old)); then
-			echo -1
-			return 0
-		fi
-	else
-		if [[ $new > $old ]]; then
-			echo 2
-			return 0
-		elif [[ $new < $old ]]; then
-			echo -2
-			return 0
-		fi
-	fi
-	echo 0
-}
-
-record_pkg() {
+# 解析包的基本名：parse_name <包全名>
+# mingw-w64-i686-3proxy-0.8.12-1-any.pkg.tar.xz 解析后为 mingw-w64-i686-3proxy
+parse_name() {
 	# mingw-w64-i686-3proxy-0.8.12-1-any.pkg.tar.xz
 	local full_name=$1
 	# 去掉-any.pkg.tar.xz，结果：mingw-w64-i686-3proxy-0.8.12-1
@@ -112,7 +94,30 @@ record_pkg() {
 	# 去掉编译次数，结果：mingw-w64-i686-3proxy-0.8.12
 	local name2=${name1%-*}
 	# 去掉版本号，获取包名，结果：mingw-w64-i686-3proxy
-	local name=${name2%-*}
+	echo ${name2%-*}
+}
+
+# 使用 $SPEC_PKGS 文件中指定版本的包: apply_spec_pkg <包数组>
+apply_spec_pkg() {
+	if [ ! -s "$SPEC_PKGS" ]; then # 如果文件不存在或者为空则直接返回
+		return 0
+	fi
+	local -n ar=$1 # 创建$1数组的引用
+	local n=0
+	while read -r full_name; do
+		name=$(parse_name $full_name)
+		# 将名字为$name的包替换成指定包
+		ar[$name]=$full_name
+		let n+=1
+	done < "$SPEC_PKGS"
+	echo "使用 $SPEC_PKGS 中 ${n} 个包"
+}
+
+# 根据包全名记录版本号：record_pkg <包全名>
+record_pkg() {
+	# mingw-w64-i686-3proxy-0.8.12-1-any.pkg.tar.xz
+	local full_name=$1
+	name=$(parse_name $full_name)
 	if [[ ${PkgName[$name]} == "" ]]; then # 如果没有记录，则记录包的全名及版本号
 		PkgName[$name]=$full_name
 	else
@@ -126,12 +131,13 @@ record_pkg() {
 	fi
 }
 
+# 生成最新版本的包
 build_latest_pkg() {
 	if ((IS_DOWNLOAD_ALL)); then
 		LATEST_PKG_LIST=$ALL_PKG_LIST
 	else
 		if [ ! -s "${LATEST_PKG_LIST}" ]; then
-			echo "生成最新版本软件包到 $LATEST_PKG_LIST"
+			echo "生成 $LATEST_PKG_LIST"
 			local total=$(wc -l < $ALL_PKG_LIST)
 			local n=1
 			while read -r name; do
@@ -145,9 +151,13 @@ build_latest_pkg() {
 				echo "错误：未检测到 pkg.tar.* 文件"
 				exit 1
 			fi
+			# 应用特定的包版本
+			apply_spec_pkg PkgName
 			# 保存所有最新版本到文件
 			# 使用sed将空格替换成换行符，再排序，排序时不区分大小写
 			echo ${PkgName[@]} | sed 's/\ /\n/g' | sort -f > $LATEST_PKG_LIST
+		else
+			echo "生成 ${LATEST_PKG_LIST} (已存在，跳过)"
 		fi
 	fi
 }
@@ -190,7 +200,7 @@ parall_download() {
 		# 计算序号（从1开始）
 		idx=$((i + 1))
 		echo "$idx ${packages[i]}" # 返回参数，第一个参数是序号,第二个参数是包名
-	done | xargs -P "$PARALLEL_DOWNLOAD_NUM" -I {} bash -c ' # -I {} 会把所有参数作为一个整体传给bash
+	done | xargs -P "$PARALLEL_NUM" -I {} bash -c ' # -I {} 会把所有参数作为一个整体传给bash
 	args=($1)				# 把参数数组化
 	idx=${args[0]}			# 取第一个参数：序号
 	pkg=${args[1]}			# 取第二个参数：包名
@@ -201,7 +211,7 @@ parall_download() {
 build_db() {
 	echo "生成数据库"
 	rm -f "$DBNAME".db "$DBNAME".files "$DBNAME".db.tar.gz "$DBNAME".files.tar.gz
-	repo-add "$DBNAME.db.tar.gz" *.pkg.tar.*
+	repo-add "$DBNAME.db.tar.gz" ${packages[@]}
 }
 
 check_tools

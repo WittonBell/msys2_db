@@ -34,11 +34,13 @@ ARCH=32
 TYPE="mingw"
 URL="$MINGW_I686_URL"
 FORCE=0
+NODB=0
 
 usage() {
 	echo "用法：${0##*/} [选项]"
 	echo "选项:"
 	echo " -b <架构>，mingw默认为当前架构，可以是：32， 64"
+	echo " -d 只更新列表并下载，不全部生成DB"
 	echo " -f 强制重新下载Web页面，解析所有包，生成最新包列表"
 	echo " -p <并行下载数> 指定并行下载的数量，默认数量：$PARALLEL_NUM"
 	echo " -s <目标系统>，默认为xp，目标系统可以是：xp，win7"
@@ -71,7 +73,7 @@ detected_arch() {
 detected_arch
 
 # 解析命令行参数
-while getopts ab:fhp:t:v opt ; do
+while getopts ab:dfhp:t:v opt ; do
 	case $opt in
 		b)
 			ARCH="$OPTARG"
@@ -82,6 +84,9 @@ while getopts ab:fhp:t:v opt ; do
 					usage
 					;;
 			esac;;
+		d)
+			NODB=1
+			;;
 		f)
 			FORCE=1
 			;;
@@ -196,7 +201,7 @@ download_html() {
 
 # 从下载的html文件中分析出可以下载的包
 build_pkg_list() {
-	if (($FORCE)) || [ ! -s "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
+	if (($FORCE)) || [ ! -s "$ALL_PKG_LIST" ] || [ "$CACHE_HTML" -nt "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
 		echo 生成 $ALL_PKG_LIST
 		local re='/i686/[^"]+pkg\.tar\.[a-z0-9]+/download'
 		if (($ARCH == 64)); then
@@ -270,30 +275,35 @@ build_latest_pkg() {
 	if ((IS_DOWNLOAD_ALL)); then
 		LATEST_PKG_LIST=$ALL_PKG_LIST
 	else
-		if (($FORCE)) || [ ! -s "${LATEST_PKG_LIST}" ]; then
+		local file="$ALL_PKG_LIST"
+		if (($FORCE)) || [ ! -s "${LATEST_PKG_LIST}" ] || [ "$ALL_PKG_LIST" -nt "${LATEST_PKG_LIST}" ]; then
 			echo "生成 $LATEST_PKG_LIST"
-			local total=$(wc -l < $ALL_PKG_LIST)
-			local n=0
-			res=""
-			while read -r name; do
-				record_pkg $name
-				let n+=1
-				echo [$n/$total] $name $res
-			done < "$ALL_PKG_LIST"
-
-			local PKG_COUNT=${#PkgName[@]} # 获取PkgName字典的大小
-			if [[ "$PKG_COUNT" == 0 ]]; then
-				echo "错误：未检测到 pkg.tar.* 文件"
-				exit 1
-			fi
-			# 应用特定的包版本
-			apply_spec_pkg PkgName
-			# 保存所有最新版本到文件
-			# 使用sed将空格替换成换行符，再排序，排序时不区分大小写
-			echo ${PkgName[@]} | sed 's/\ /\n/g' | sort -f > $LATEST_PKG_LIST
+		elif [ "$SPEC_PKGS" -nt "${LATEST_PKG_LIST}" ]; then
+			file="$LATEST_PKG_LIST"
+			echo "$SPEC_PKGS 比$LATEST_PKG_LIST 新，更新到 $LATEST_PKG_LIST"
 		else
 			echo "生成 ${LATEST_PKG_LIST} (已存在，跳过)"
+			return 0
 		fi
+		local total=$(wc -l < $file)
+		local n=0
+		res=""
+		while read -r name; do
+			record_pkg $name
+			let n+=1
+			echo [$n/$total] $name $res
+		done < "$file"
+
+		local PKG_COUNT=${#PkgName[@]} # 获取PkgName字典的大小
+		if [[ "$PKG_COUNT" == 0 ]]; then
+			echo "错误：未检测到 pkg.tar.* 文件"
+			exit 1
+		fi
+		# 应用特定的包版本
+		apply_spec_pkg PkgName
+		# 保存所有最新版本到文件
+		# 使用sed将空格替换成换行符，再排序，排序时不区分大小写
+		echo ${PkgName[@]} | sed 's/\ /\n/g' | sort -f > $LATEST_PKG_LIST
 	fi
 }
 
@@ -355,4 +365,6 @@ build_pkg_list
 build_latest_pkg
 mkdir -p "$OUT_DIR"
 parall_download
-build_db
+if ((! NODB)); then
+	build_db
+fi

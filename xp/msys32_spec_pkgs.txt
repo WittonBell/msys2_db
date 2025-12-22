@@ -1,2 +1,6 @@
 gdb-7.12.1-1-i686.pkg.tar.xz
 python-3.4.5-1-i686.pkg.tar.xz
+man-db-2.7.3-1-i686.pkg.tar.xz
+libgdbm-1.11-3-i686.pkg.tar.xz
+gdbm-1.11-3-i686.pkg.tar.xz
+msys2-runtime-2.5.2-2-i686.pkg.tar.xz

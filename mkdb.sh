@@ -35,11 +35,13 @@ TYPE="mingw"
 URL="$MINGW_I686_URL"
 FORCE=0
 NODB=0
+USE_CURL=0
 
 usage() {
 	echo "用法：${0##*/} [选项]"
 	echo "选项:"
 	echo " -b <架构>，mingw默认为当前架构，可以是：32， 64"
+	echo " -c 使用 curl 下载"
 	echo " -d 只更新列表并下载，不全部生成DB"
 	echo " -f 强制重新下载Web页面，解析所有包，生成最新包列表"
 	echo " -p <并行下载数> 指定并行下载的数量，默认数量：$PARALLEL_NUM"
@@ -73,7 +75,7 @@ detected_arch() {
 detected_arch
 
 # 解析命令行参数
-while getopts ab:dfhp:t:v opt ; do
+while getopts ab:cdfhp:t:v opt ; do
 	case $opt in
 		b)
 			ARCH="$OPTARG"
@@ -84,18 +86,11 @@ while getopts ab:dfhp:t:v opt ; do
 					usage
 					;;
 			esac;;
-		d)
-			NODB=1
-			;;
-		f)
-			FORCE=1
-			;;
-		h)
-			usage
-			;;
-		p)
-			PARALLEL_NUM="$OPTARG"
-			;;
+		c) USE_CURL=1 ;;
+		d) NODB=1 ;;
+		f) FORCE=1 ;;
+		h) usage ;;
+		p) PARALLEL_NUM="$OPTARG" ;;
 		s)
 			case "$OPTARG" in
 				xp)
@@ -122,12 +117,8 @@ while getopts ab:dfhp:t:v opt ; do
 					;;
 			esac
 			;;
-		v)
-			verborse=1
-			;;
-		*)
-			usage
-			;;
+		v) verborse=1 ;;
+		*) usage ;;
 	esac
 done
 
@@ -154,7 +145,7 @@ if ((verborse)); then
 	echo "架构：$ARCH"
 	echo "输出目录：$OUT_DIR"
 	echo "下载URL：$URL"
-	echo "将要下载：$CACHE_HTML"
+	echo "存储文件：$CACHE_HTML"
 	echo "所有包存放到：$ALL_PKG_LIST"
 	echo "最新包存放到：$LATEST_PKG_LIST"
 	echo "使用特定版本的包：$SPEC_PKGS"
@@ -165,7 +156,7 @@ declare -A PkgName # 定义字典：Key为没有版本号的包名，Value为包
 
 # 检查脚本需要使用到的工具
 check_tools() {
-	if type wget > /dev/null ; then # 检查是否有wget工具
+	if ((! USE_CURL)) && type wget > /dev/null ; then # 检查是否有wget工具
 		# -q 静默
 		# -c 支持断点续传（需要服务器支持，sourceforge.net不支持断点续传）
 		# -t 重试次数 -T 超时时间 -w 重试等待时间
@@ -173,11 +164,22 @@ check_tools() {
 		# --progress=bar 进度条样式为bar,默认为dot
 		# --no-check-certificate不检查安全证书，msys2-i686-20150916.exe太老，证书失效
 		# -O 写入指定文件
-		fetch='wget -qc -t 5 -T 30 -w 2 --show-progress --progress=bar  --no-check-certificate -O'
-	elif type wget > /dev/null ; then  # 检查是否有curl工具
-		# -k不检查安全证书，msys2-i686-20150916.exe太老，证书失效
+		if ((verborse)); then
+			fetch='wget -c -t 5 -T 30 -w 2 --show-progress --progress=bar  --no-check-certificate -O'
+		else
+			fetch='wget -qc -t 5 -T 30 -w 2 --show-progress --progress=bar  --no-check-certificate -O'
+		fi
+	elif type curl > /dev/null ; then  # 检查是否有curl工具
+		# -L 允许重定向。如果服务器反馈已移动到其它位置，即返回码3XX，则重新按新的地址请求资源
+		# -k 不检查安全证书，msys2-i686-20150916.exe太老，证书失效
 		# -o 写入指定文件
-		fetch='curl -ko'
+		# -v 显示详细信息
+		# -# 显示进度条
+		if ((verborse)); then
+			fetch='curl --retry 5 --retry-delay 2 -# -v -Lko'
+		else
+			fetch='curl --retry 5 --retry-delay 2 -# -Lko'
+		fi
 	else
 		echo "没有下载工具，需要下载wget或者curl"
 		exit 1
@@ -192,6 +194,9 @@ check_tools() {
 download_html() {
 	if (($FORCE)) || [ ! -s "$CACHE_HTML" ]; then # 检测$CACHE_HTML文件是否为空，-s为非空检测
 		echo "下载: $CACHE_HTML"
+		if ((verborse)); then
+			echo ${fetch} "${CACHE_HTML}.part" "$URL"
+		fi
 		${fetch} "${CACHE_HTML}.part" "$URL"
 		mv -f "${CACHE_HTML}.part" "${CACHE_HTML}"
 	else
@@ -208,7 +213,7 @@ build_pkg_list() {
 			re='/x86_64/[^"]+pkg\.tar\.[a-z0-9]+/download'
 		fi
 		if ((verborse)); then
-			echo 匹配的正则表达式：$re
+			echo "grep -oE $re $CACHE_HTML | sed -n 's#.*/\([^/]*\)/download#\1#p' | sort -u > $ALL_PKG_LIST"
 		fi
 		grep -oE $re "$CACHE_HTML" | sed -n 's#.*/\([^/]*\)/download#\1#p' | sort -u > $ALL_PKG_LIST
 	else
@@ -317,6 +322,9 @@ download() {
 	fi
 	URL="$URL$filename/download"
 	echo "[$n/$PKG_COUNT]下载：$filename"
+	if ((verborse)); then
+		echo ${fetch} "${filename}.part" "$URL"
+	fi
 	# 下载到一个临时文件
 	${fetch} "${filename}.part" "$URL"
 	# 下载完成后改名
@@ -327,7 +335,7 @@ parall_download() {
 	# 导出函数，使子进程可以调用
 	export -f download
 	# 导出变量，使子进程可以使用
-	export URL PKG_COUNT fetch
+	export URL PKG_COUNT fetch verborse
 	# 将$LATEST_PKG_LIST文件内容读取到数组中
 	readarray -t packages < $LATEST_PKG_LIST
 	# 获取数组大小

@@ -36,9 +36,11 @@ URL="$MINGW_I686_URL"
 FORCE=0
 NODB=0
 USE_CURL=0
+ONLY_SPEC_PKG=1
 
 usage() {
 	echo "用法：${0##*/} [选项]"
+	echo "默认只下载并使用指定包来更新db"
 	echo "选项:"
 	echo " -b <架构>，mingw默认为当前架构，可以是：32， 64"
 	echo " -c 使用 curl 下载"
@@ -88,7 +90,10 @@ while getopts ab:cdfhp:t:v opt ; do
 			esac;;
 		c) USE_CURL=1 ;;
 		d) NODB=1 ;;
-		f) FORCE=1 ;;
+		f)
+			FORCE=1
+			ONLY_SPEC_PKG=0
+			;;
 		h) usage ;;
 		p) PARALLEL_NUM="$OPTARG" ;;
 		s)
@@ -184,7 +189,7 @@ check_tools() {
 		echo "没有下载工具，需要下载wget或者curl"
 		exit 1
 	fi
-	if ! type vercmp > /dev/null ; then
+	if ((! $ONLY_SPEC_PKG)) && ! type vercmp > /dev/null ; then
 		echo 没有版本比较工具：vercmp
 		exit 1
 	fi
@@ -192,6 +197,9 @@ check_tools() {
 
 # 下载html文件
 download_html() {
+	if (($ONLY_SPEC_PKG)); then
+		return 0
+	fi
 	if (($FORCE)) || [ ! -s "$CACHE_HTML" ]; then # 检测$CACHE_HTML文件是否为空，-s为非空检测
 		echo "下载: $CACHE_HTML"
 		if ((verborse)); then
@@ -206,6 +214,9 @@ download_html() {
 
 # 从下载的html文件中分析出可以下载的包
 build_pkg_list() {
+	if (($ONLY_SPEC_PKG)); then
+		return 0
+	fi
 	if (($FORCE)) || [ ! -s "$ALL_PKG_LIST" ] || [ "$CACHE_HTML" -nt "$ALL_PKG_LIST" ]; then # 检测$ALL_PKG_LIST文件是否为空，-s为非空检测
 		echo 生成 $ALL_PKG_LIST
 		local re='/i686/[^"]+pkg\.tar\.[a-z0-9]+/download'
@@ -277,6 +288,10 @@ record_pkg() {
 
 # 生成最新版本的包
 build_latest_pkg() {
+	if (($ONLY_SPEC_PKG)); then
+		LATEST_PKG_LIST=$SPEC_PKGS
+		return 0
+	fi
 	if ((IS_DOWNLOAD_ALL)); then
 		LATEST_PKG_LIST=$ALL_PKG_LIST
 	else
@@ -363,7 +378,10 @@ parall_download() {
 
 build_db() {
 	echo "生成数据库"
-	rm -f "$DBNAME".db "$DBNAME".files "$DBNAME".db.tar.gz "$DBNAME".files.tar.gz
+	if ((! $ONLY_SPEC_PKG)); then
+		echo 删除 "$DBNAME".db "$DBNAME".files "$DBNAME".db.tar.gz "$DBNAME".files.tar.gz
+		rm -f "$DBNAME".db "$DBNAME".files "$DBNAME".db.tar.gz "$DBNAME".files.tar.gz
+	fi
 	repo-add "$DBNAME.db.tar.gz" ${packages[@]}
 }
 

@@ -56,9 +56,8 @@ usage() {
 
 # 根据当前系统来决定使用msys的32位版本还是64位版本
 detected_arch() {
-	local sys=$(uname -a)
-	local sys1=${sys% *}
-	case ${sys1##* } in
+	local m=$(uname -m)
+	case $m in
 		i686)
 			ARCH=32
 			URL="$MINGW_I686_URL"

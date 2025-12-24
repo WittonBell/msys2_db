@@ -1,4 +1,6 @@
+bash-4.3.042-4-i686.pkg.tar.xz
 gdb-7.12.1-1-i686.pkg.tar.xz
 python-3.4.5-1-i686.pkg.tar.xz
 man-db-2.7.4-1-i686.pkg.tar.xz
 msys2-runtime-2.5.2-2-i686.pkg.tar.xz
+mintty-1~2.4.2-1-i686.pkg.tar.xz
